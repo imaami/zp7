@@ -185,6 +185,8 @@ uint64_t zp7_pext_pre_64(uint64_t a, const zp7_masks_64_t *masks) {
     return a;
 }
 
+uint64_t zp7_pext_64(uint64_t a, uint64_t mask) asm("_pext_u64");
+
 uint64_t zp7_pext_64(uint64_t a, uint64_t mask) {
     zp7_masks_64_t masks = zp7_ppp_64(mask);
     return zp7_pext_pre_64(a, &masks);
@@ -230,6 +232,8 @@ uint64_t zp7_pdep_pre_64(uint64_t a, const zp7_masks_64_t *masks) {
     }
     return a;
 }
+
+uint64_t zp7_pdep_64(uint64_t a, uint64_t mask) asm("_pdep_u64");
 
 uint64_t zp7_pdep_64(uint64_t a, uint64_t mask) {
     zp7_masks_64_t masks = zp7_ppp_64(mask);

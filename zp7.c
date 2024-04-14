@@ -95,6 +95,7 @@ typedef struct {
 #ifndef HAS_CLMUL
 // If we don't have access to the CLMUL instruction, emulate it with
 // shifts and XORs
+__attribute__((always_inline,const))
 static inline uint64_t prefix_sum(uint64_t x) {
     for (int i = 0; i < N_BITS; i++)
         x ^= x << (1 << i);
@@ -105,6 +106,7 @@ static inline uint64_t prefix_sum(uint64_t x) {
 #ifndef HAS_POPCNT
 // POPCNT polyfill. See this page for information about the algorithm:
 // https://www.chessprogramming.org/Population_Count#SWAR-Popcount
+__attribute__((always_inline,const)) static inline
 uint64_t popcnt_64(uint64_t x) {
     const uint64_t m_1 = 0x5555555555555555LLU;
     const uint64_t m_2 = 0x3333333333333333LLU;
@@ -120,6 +122,7 @@ uint64_t popcnt_64(uint64_t x) {
 // It can also be called separately and cached, if the mask values will be used
 // more than once (these can be shared across PEXT and PDEP calls if they use
 // the same masks). 
+__attribute__((always_inline)) static inline
 zp7_masks_64_t zp7_ppp_64(uint64_t mask) {
     zp7_masks_64_t r;
     r.mask = mask;
@@ -169,6 +172,7 @@ zp7_masks_64_t zp7_ppp_64(uint64_t mask) {
 
 // PEXT
 
+__attribute__((always_inline)) static inline
 uint64_t zp7_pext_pre_64(uint64_t a, const zp7_masks_64_t *masks) {
     // Mask only the bits that are set in the input mask. Otherwise they collide
     // with input bits and screw everything up
@@ -194,6 +198,7 @@ uint64_t zp7_pext_64(uint64_t a, uint64_t mask) {
 
 // PDEP
 
+__attribute__((always_inline)) static inline
 uint64_t zp7_pdep_pre_64(uint64_t a, const zp7_masks_64_t *masks) {
 #ifdef HAS_POPCNT
     uint64_t popcnt = _popcnt64(masks->mask);

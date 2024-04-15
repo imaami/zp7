@@ -22,6 +22,10 @@
 
 #include <stdint.h>
 
+#ifdef __aarch64__
+# include <arm_neon.h>
+#endif
+
 #if defined(__i386__) || defined(__x86_64__)
 # include <immintrin.h>
 #endif
@@ -99,8 +103,9 @@ typedef struct {
 #ifndef HAS_CLMUL
 // If we don't have access to the CLMUL instruction, emulate it with
 // shifts and XORs
-__attribute__((always_inline,const))
-static inline uint32_t prefix_sum_32(uint32_t x) {
+__attribute__((const))
+__attribute__((always_inline)) inline
+static uint32_t prefix_sum_32(uint32_t x) {
 	x ^= x <<  1U;
 	x ^= x <<  2U;
 	x ^= x <<  4U;
@@ -108,8 +113,9 @@ static inline uint32_t prefix_sum_32(uint32_t x) {
 	return x ^ x << 16U;
 }
 
-__attribute__((always_inline,const))
-static inline uint64_t prefix_sum_64(uint64_t x) {
+__attribute__((const))
+__attribute__((always_inline)) inline
+static uint64_t prefix_sum_64(uint64_t x) {
 	x ^= x <<  1U;
 	x ^= x <<  2U;
 	x ^= x <<  4U;
@@ -125,8 +131,9 @@ static inline uint64_t prefix_sum_64(uint64_t x) {
 #if !__has_builtin(__builtin_popcountg)
 // POPCNT polyfill. See this page for information about the algorithm:
 // https://www.chessprogramming.org/Population_Count#SWAR-Popcount
-__attribute__((always_inline,const))
-static inline uint64_t zp7_popcnt_64(uint64_t x) {
+__attribute__((const))
+__attribute__((always_inline)) inline
+static uint64_t zp7_popcnt_64(uint64_t x) {
 	x -= UINT64_C(0x5555555555555555) & x >> 1U;
 	x = (UINT64_C(0x3333333333333333) & x >> 2U)
 	  + (UINT64_C(0x3333333333333333) & x);
@@ -134,8 +141,10 @@ static inline uint64_t zp7_popcnt_64(uint64_t x) {
 	   & UINT64_C(0x0f0f0f0f0f0f0f0f))
 	   * UINT64_C(0x0101010101010101) >> 56U;
 }
-__attribute__((always_inline,const))
-static inline uint32_t zp7_popcnt_32(uint32_t x) {
+
+__attribute__((const))
+__attribute__((always_inline)) inline
+static uint32_t zp7_popcnt_32(uint32_t x) {
 	x -= UINT32_C(0x55555555) & x >> 1U;
 	x = (UINT32_C(0x33333333) & x >> 2U)
 	  + (UINT32_C(0x33333333) & x);
@@ -145,8 +154,9 @@ static inline uint32_t zp7_popcnt_32(uint32_t x) {
 }
 #endif
 
-__attribute__((always_inline,const))
-static inline uint64_t popcnt_64(uint64_t x) {
+__attribute__((const))
+__attribute__((always_inline)) inline
+static uint64_t popcnt_64(uint64_t x) {
 	return (uint64_t)_Generic(x
 #if __has_builtin(__builtin_popcountl)
 		, typeof(1UL): __builtin_popcountl
@@ -162,8 +172,9 @@ static inline uint64_t popcnt_64(uint64_t x) {
 	)(x);
 }
 
-__attribute__((always_inline,const))
-static inline uint32_t popcnt_32(uint32_t x) {
+__attribute__((const))
+__attribute__((always_inline)) inline
+static uint32_t popcnt_32(uint32_t x) {
 	return (uint32_t)_Generic(x
 #if __has_builtin(__builtin_popcount)
 		, typeof(1U): __builtin_popcount
@@ -185,8 +196,8 @@ static inline uint32_t popcnt_32(uint32_t x) {
 // It can also be called separately and cached, if the mask values will be used
 // more than once (these can be shared across PEXT and PDEP calls if they use
 // the same masks). 
-__attribute__((always_inline)) static inline
-zp7_masks_64_t zp7_ppp_64(uint64_t mask) {
+__attribute__((always_inline)) inline
+static zp7_masks_64_t zp7_ppp_64(uint64_t mask) {
     zp7_masks_64_t r;
     r.mask = mask;
 
@@ -194,6 +205,22 @@ zp7_masks_64_t zp7_ppp_64(uint64_t mask) {
     mask = ~mask;
 
 #ifdef HAS_CLMUL
+#ifdef __aarch64__
+    uint64x2_t m = vdupq_n_u64(mask);
+    uint64x2_t neg_2 = vdupq_n_u64(-2LL);
+    for (int i = 0; i < N_BITS - 1; i++) {
+        poly64_t m_low = vgetq_lane_u64(m, 0);
+        poly64_t neg_2_low = vgetq_lane_u64(neg_2, 0);
+
+        poly128_t b_poly = vmull_p64(m_low, neg_2_low);
+        uint64x2_t bit = vreinterpretq_u64_p128(b_poly);
+
+        r.ppp_bit[i] = vgetq_lane_u64(bit, 0);
+        m = vandq_u64(m, bit);
+    }
+
+    r.ppp_bit[N_BITS - 1] = -vgetq_lane_u64(m, 0) << 1;
+#else // __aarch64__
     // Move the mask and -2 to XMM registers for CLMUL
     __m128i m = _mm_cvtsi64_si128(mask);
     __m128i neg_2 = _mm_cvtsi64_si128(-2LL);
@@ -215,7 +242,8 @@ zp7_masks_64_t zp7_ppp_64(uint64_t mask) {
     // bits set in ~mask. If two bits are set, one of them is the top bit, which
     // gets shifted out, since we're counting bits below each mask bit.
     r.ppp_bit[N_BITS - 1] = -_mm_cvtsi128_si64(m) << 1;
-#else
+#endif // __aarch64__
+#else // HAS_CLMUL
     for (int i = 0; i < N_BITS - 1; i++) {
         // Do a 1-bit parallel prefix popcount, shifted left by 1
         uint64_t bit = prefix_sum(mask << 1);
@@ -228,15 +256,15 @@ zp7_masks_64_t zp7_ppp_64(uint64_t mask) {
     // The last iteration won't carry, so just use neg/shift. See the CLMUL
     // case above for justification.
     r.ppp_bit[N_BITS - 1] = -mask << 1;
-#endif
+#endif // HAS_CLMUL
 
     return r;
 }
 
 // PEXT
 
-__attribute__((always_inline)) static inline
-uint64_t zp7_pext_pre_64(uint64_t a, const zp7_masks_64_t *masks) {
+__attribute__((always_inline)) inline
+static uint64_t zp7_pext_pre_64(uint64_t a, const zp7_masks_64_t *masks) {
     // Mask only the bits that are set in the input mask. Otherwise they collide
     // with input bits and screw everything up
     a &= masks->mask;
@@ -261,8 +289,8 @@ uint64_t zp7_pext_64(uint64_t a, uint64_t mask) {
 
 // PDEP
 
-__attribute__((always_inline)) static inline
-uint64_t zp7_pdep_pre_64(uint64_t a, const zp7_masks_64_t *masks) {
+__attribute__((always_inline)) inline
+static uint64_t zp7_pdep_pre_64(uint64_t a, const zp7_masks_64_t *masks) {
     uint64_t popcnt = popcount(masks->mask);
 
     // Mask just the bits that will end up in the final result--the low P bits,

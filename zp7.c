@@ -20,6 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#include <limits.h>
 #include <stdint.h>
 
 #ifdef __aarch64__
@@ -72,7 +73,7 @@
 //
 // For processors with the CLMUL instructions (most x86 CPUs since ~2010), we
 // can do the parallel prefix XOR and left shift in one instruction, by
-// doing a carry-less multiply by -2. This is enabled with the HAS_CLMUL define.
+// doing a carry-less multiply by -2.
 //
 // Anyways, once we have these six 64-bit values of the PPP, we can use each
 // PPP bit to shift input bits by a power of two. That is, input bits that are
@@ -100,103 +101,39 @@ typedef struct {
     uint64_t ppp_bit[N_BITS];
 } zp7_masks_64_t;
 
-#ifndef HAS_CLMUL
+
+#if !(defined(__aarch64__) && defined(__ARM_FEATURE_AES)) && \
+    !((defined(__i386__) || defined(__x86_64__)) && defined(__PCLMUL__))
 // If we don't have access to the CLMUL instruction, emulate it with
 // shifts and XORs
-__attribute__((const))
-__attribute__((always_inline)) inline
-static uint32_t prefix_sum_32(uint32_t x) {
-	x ^= x <<  1U;
-	x ^= x <<  2U;
-	x ^= x <<  4U;
-	x ^= x <<  8U;
-	return x ^ x << 16U;
-}
-
-__attribute__((const))
-__attribute__((always_inline)) inline
-static uint64_t prefix_sum_64(uint64_t x) {
-	x ^= x <<  1U;
-	x ^= x <<  2U;
-	x ^= x <<  4U;
-	x ^= x <<  8U;
-	x ^= x << 16U;
-	return x ^ x << 32U;
-}
-
-#define prefix_sum(x) \
-	_Generic(x, uint64_t: prefix_sum_64, uint32_t: prefix_sum_32)(x)
+# define prefix_sum(x) ({ \
+  typeof(_Generic(x, uint32_t:(uint32_t)0, uint64_t:(uint64_t)0)) y = x; \
+  y ^= y << 1U; y ^= y << 2U; y ^= y << 4U; y ^= y << 8U; y ^= y << 16U; \
+  _Generic(y, uint32_t:y, uint64_t:y ^ y << 32U); })
 #endif
 
-#if !__has_builtin(__builtin_popcountg)
+#if __has_builtin(__builtin_popcountg)
+# define popcountg __builtin_popcountg
+#else
 // POPCNT polyfill. See this page for information about the algorithm:
 // https://www.chessprogramming.org/Population_Count#SWAR-Popcount
-__attribute__((const))
-__attribute__((always_inline)) inline
-static uint64_t zp7_popcnt_64(uint64_t x) {
-	x -= UINT64_C(0x5555555555555555) & x >> 1U;
-	x = (UINT64_C(0x3333333333333333) & x >> 2U)
-	  + (UINT64_C(0x3333333333333333) & x);
-	return (x + (x >> 4U)
-	   & UINT64_C(0x0f0f0f0f0f0f0f0f))
-	   * UINT64_C(0x0101010101010101) >> 56U;
-}
-
-__attribute__((const))
-__attribute__((always_inline)) inline
-static uint32_t zp7_popcnt_32(uint32_t x) {
-	x -= UINT32_C(0x55555555) & x >> 1U;
-	x = (UINT32_C(0x33333333) & x >> 2U)
-	  + (UINT32_C(0x33333333) & x);
-	return (x + (x >> 4U)
-	   & UINT32_C(0x0f0f0f0f))
-	   * UINT32_C(0x01010101) >> 24U;
-}
+# define popcountg(x) ({               \
+  typeof(_Generic(x,                   \
+    uint32_t: (uint32_t)0,             \
+    uint64_t: (uint64_t)0)) y = x;     \
+  y -=  y >> 1U  &  (typeof(y))-1/3;   \
+  y  = (y >> 2U  &  (typeof(y))-1/5)   \
+     + (y        &  (typeof(y))-1/5);  \
+ (y  + (y >> 4U) &  (typeof(y))-1/17)  \
+                 * ((typeof(y))-1/255) \
+     >> CHAR_BIT *  (sizeof(y) -1); })
 #endif
-
-__attribute__((const))
-__attribute__((always_inline)) inline
-static uint64_t popcnt_64(uint64_t x) {
-	return (uint64_t)_Generic(x
-#if __has_builtin(__builtin_popcountl)
-		, typeof(1UL): __builtin_popcountl
-#endif
-#if __has_builtin(__builtin_popcountll)
-		, typeof(1ULL): __builtin_popcountll
-#endif
-#if __has_builtin(__builtin_popcountg)
-		, default: __builtin_popcountg
-#else
-		, default: zp7_popcnt_64
-#endif
-	)(x);
-}
-
-__attribute__((const))
-__attribute__((always_inline)) inline
-static uint32_t popcnt_32(uint32_t x) {
-	return (uint32_t)_Generic(x
-#if __has_builtin(__builtin_popcount)
-		, typeof(1U): __builtin_popcount
-#endif
-#if __has_builtin(__builtin_popcountl)
-		, typeof(1UL): __builtin_popcountl
-#endif
-#if __has_builtin(__builtin_popcountg)
-		, default: __builtin_popcountg
-#else
-		, default: zp7_popcnt_32
-#endif
-	)(x);
-}
-
-#define popcount(x) _Generic(x, uint64_t: popcnt_64, uint32_t: popcnt_32)(x)
 
 // Parallel-prefix-popcount. This is used by both the PEXT/PDEP polyfills.
 // It can also be called separately and cached, if the mask values will be used
 // more than once (these can be shared across PEXT and PDEP calls if they use
 // the same masks). 
-__attribute__((always_inline)) inline
+__attribute__((const))
 static zp7_masks_64_t zp7_ppp_64(uint64_t mask) {
     zp7_masks_64_t r;
     r.mask = mask;
@@ -204,23 +141,17 @@ static zp7_masks_64_t zp7_ppp_64(uint64_t mask) {
     // Count *unset* bits
     mask = ~mask;
 
-#ifdef HAS_CLMUL
-#ifdef __aarch64__
+#if defined(__aarch64__) && defined(__ARM_FEATURE_AES)
     uint64x2_t m = vdupq_n_u64(mask);
     uint64x2_t neg_2 = vdupq_n_u64(-2LL);
     for (int i = 0; i < N_BITS - 1; i++) {
-        poly64_t m_low = vgetq_lane_u64(m, 0);
-        poly64_t neg_2_low = vgetq_lane_u64(neg_2, 0);
-
-        poly128_t b_poly = vmull_p64(m_low, neg_2_low);
-        uint64x2_t bit = vreinterpretq_u64_p128(b_poly);
-
+        uint64x2_t bit = vreinterpretq_u64_p128(vmull_p64(
+            vgetq_lane_u64(m, 0), vgetq_lane_u64(neg_2, 0)));
         r.ppp_bit[i] = vgetq_lane_u64(bit, 0);
         m = vandq_u64(m, bit);
     }
-
     r.ppp_bit[N_BITS - 1] = -vgetq_lane_u64(m, 0) << 1;
-#else // __aarch64__
+#elif (defined(__i386__) || defined(__x86_64__)) && defined(__PCLMUL__)
     // Move the mask and -2 to XMM registers for CLMUL
     __m128i m = _mm_cvtsi64_si128(mask);
     __m128i neg_2 = _mm_cvtsi64_si128(-2LL);
@@ -242,8 +173,7 @@ static zp7_masks_64_t zp7_ppp_64(uint64_t mask) {
     // bits set in ~mask. If two bits are set, one of them is the top bit, which
     // gets shifted out, since we're counting bits below each mask bit.
     r.ppp_bit[N_BITS - 1] = -_mm_cvtsi128_si64(m) << 1;
-#endif // __aarch64__
-#else // HAS_CLMUL
+#else
     for (int i = 0; i < N_BITS - 1; i++) {
         // Do a 1-bit parallel prefix popcount, shifted left by 1
         uint64_t bit = prefix_sum(mask << 1);
@@ -256,7 +186,7 @@ static zp7_masks_64_t zp7_ppp_64(uint64_t mask) {
     // The last iteration won't carry, so just use neg/shift. See the CLMUL
     // case above for justification.
     r.ppp_bit[N_BITS - 1] = -mask << 1;
-#endif // HAS_CLMUL
+#endif
 
     return r;
 }
@@ -291,7 +221,18 @@ uint64_t zp7_pext_64(uint64_t a, uint64_t mask) {
 
 __attribute__((always_inline)) inline
 static uint64_t zp7_pdep_pre_64(uint64_t a, const zp7_masks_64_t *masks) {
-    uint64_t popcnt = popcount(masks->mask);
+    uint64_t popcnt = (typeof(popcnt))_Generic(popcnt,
+        #if __has_builtin(__builtin_popcount)
+        typeof(1U): __builtin_popcount(masks->mask),
+        #endif
+        #if __has_builtin(__builtin_popcountl)
+        typeof(1UL): __builtin_popcountl(masks->mask),
+        #endif
+        #if __has_builtin(__builtin_popcountll)
+        typeof(1ULL): __builtin_popcountll(masks->mask),
+        #endif
+        default: popcountg(masks->mask)
+    );
 
     // Mask just the bits that will end up in the final result--the low P bits,
     // where P is the popcount of the mask. The other bits would collide.
@@ -302,7 +243,7 @@ static uint64_t zp7_pdep_pre_64(uint64_t a, const zp7_masks_64_t *masks) {
     // this should be -1. The BZHI instruction (introduced with BMI2, the same
     // instructions as PEXT/PDEP) handles this properly, but isn't portable.
 
-#ifdef HAS_BZHI
+#if (defined(__i386__) || defined(__x86_64__)) && defined(__BMI2__)
     a = _bzhi_u64(a, popcnt);
 #else
     // If we don't have BZHI, use a portable workaround.  Since (mask == -1)

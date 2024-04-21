@@ -217,6 +217,12 @@ uint64_t zp7_pext_64(uint64_t a, uint64_t mask) {
     return zp7_pext_pre_64(a, &masks);
 }
 
+uint32_t zp7_pext_32(uint32_t a, uint32_t mask) asm("_pext_u32");
+
+uint32_t zp7_pext_32(uint32_t a, uint32_t mask) {
+	return (uint32_t)zp7_pext_64(a, mask);
+}
+
 // PDEP
 
 __attribute__((always_inline)) inline
@@ -271,4 +277,10 @@ uint64_t zp7_pdep_64(uint64_t a, uint64_t mask) asm("_pdep_u64");
 uint64_t zp7_pdep_64(uint64_t a, uint64_t mask) {
     zp7_masks_64_t masks = zp7_ppp_64(mask);
     return zp7_pdep_pre_64(a, &masks);
+}
+
+uint32_t zp7_pdep_32(uint32_t a, uint32_t mask) asm("_pdep_u32");
+
+uint32_t zp7_pdep_32(uint32_t a, uint32_t mask) {
+	return (uint32_t)zp7_pdep_64(a, mask);
 }
